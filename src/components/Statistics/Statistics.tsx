@@ -10,14 +10,16 @@ import {
 import {
   formatCurrency, getPastMonths, formatMonth, getYearMonth,
 } from '../../utils/formatters';
+import SpendingCalendar from './SpendingCalendar';
 
-type Tab = 'monthly' | 'category' | 'annual' | 'trend';
+type Tab = 'monthly' | 'category' | 'annual' | 'trend' | 'calendar';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'monthly', label: '월별 현황' },
   { id: 'category', label: '카테고리별' },
   { id: 'annual', label: '연간 통계' },
   { id: 'trend', label: '6개월 추세' },
+  { id: 'calendar', label: '소비 캘린더' },
 ];
 
 function CustomTooltip({ active, payload, label, currency }: {
@@ -308,6 +310,9 @@ export default function Statistics() {
           </div>
         </div>
       )}
+
+      {/* 소비 캘린더 */}
+      {activeTab === 'calendar' && <SpendingCalendar />}
     </div>
   );
 }

@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Plus, Edit2, Trash2, Landmark, TrendingUp, Banknote, PiggyBank, X, ChevronDown, CreditCard, Camera, LineChart } from 'lucide-react';
 import ScreenshotAssetImport from '../Onboarding/ScreenshotAssetImport';
+import CurrencyBadge from '../common/CurrencyBadge';
 import { Account, AccountType, Currency } from '../../types';
 import { useApp } from '../../contexts/AppContext';
 import { formatCurrency, formatAmountInput, parseAmount } from '../../utils/formatters';
 import { fromKRW } from '../../utils/currency';
-import { getTotalAssetsKRW, getLiabilitiesKRW, accountCurrentKRW, accountCurrentNative } from '../../utils/calculations';
-import { holdingValueKRW, totalHoldingsKRW } from '../../utils/pricing';
+import { getTotalAssetsKRW, getLiabilitiesKRW, accountCurrentNative, accountValueKRW, securitiesValuationKRW } from '../../utils/calculations';
 
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   bank: '은행',
@@ -90,7 +90,7 @@ function AccountForm({ onClose, editAccount }: AccountFormProps) {
               <select value={type} onChange={(e) => setType(e.target.value as AccountType)}
                 className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none"
               >
-                {(Object.keys(ACCOUNT_TYPE_LABELS) as AccountType[]).map((t) => (
+                {(Object.keys(ACCOUNT_TYPE_LABELS) as AccountType[]).filter((t) => t !== 'securities').map((t) => (
                   <option key={t} value={t}>{ACCOUNT_TYPE_LABELS[t]}</option>
                 ))}
               </select>
@@ -155,7 +155,7 @@ function AccountForm({ onClose, editAccount }: AccountFormProps) {
 }
 
 export default function AssetManager() {
-  const { accounts, transactions, deleteAccount, addAccount, holdings, rates, displayCurrency, setCurrentPage, setSecuritiesFilter } = useApp();
+  const { accounts, transactions, deleteAccount, addAccount, rates, displayCurrency, setCurrentPage } = useApp();
   const [showForm, setShowForm] = useState(false);
   const [showShot, setShowShot] = useState(false);
   const [editTarget, setEditTarget] = useState<Account | undefined>();
@@ -170,48 +170,30 @@ export default function AssetManager() {
   }
 
   const fmt = (krw: number) => formatCurrency(fromKRW(krw, displayCurrency, rates), displayCurrency);
-  const holdingsKRW = totalHoldingsKRW(holdings, rates);
-  const totalAssets = getTotalAssetsKRW(accounts, rates, transactions) + holdingsKRW;
+  const holdingsKRW = securitiesValuationKRW(accounts, rates);
+  const totalAssets = getTotalAssetsKRW(accounts, rates, transactions);
   const liabilities = getLiabilitiesKRW(accounts, rates, transactions);
   const netWorth = totalAssets - liabilities;
 
-  // 증권은 보유종목(증권관리)을 증권사별로 합산
-  const brokerGroups = (() => {
-    const map = new Map<string, { value: number; count: number }>();
-    holdings.forEach((h) => {
-      const key = h.broker || '기타';
-      const cur = map.get(key) || { value: 0, count: 0 };
-      cur.value += holdingValueKRW(h, rates);
-      cur.count += 1;
-      map.set(key, cur);
-    });
-    return Array.from(map.entries()).map(([broker, v]) => ({ broker, ...v }));
-  })();
-
-  function openSecurities(broker: string) {
-    setSecuritiesFilter(broker === '기타' ? '기타' : broker);
-    setCurrentPage('securities');
-  }
-
-  // 증권 계좌(type==='securities')는 보유종목으로 대체하므로 그룹 표시에서 제외
   const groupedByType = (Object.keys(ACCOUNT_TYPE_LABELS) as AccountType[])
-    .filter((type) => type !== 'securities')
     .map((type) => ({
       type,
       accounts: accounts.filter((a) => a.type === type),
-      total: accounts.filter((a) => a.type === type).reduce((s, a) => s + accountCurrentKRW(a, transactions, rates), 0),
+      total: accounts.filter((a) => a.type === type).reduce((s, a) => s + accountValueKRW(a, transactions, rates), 0),
     })).filter((g) => g.accounts.length > 0);
 
   const ASSET_GROUPS: { label: string; types: AccountType[] }[] = [
     { label: '현금성 자산', types: ['cash', 'bank'] },
     { label: '예금', types: ['deposit', 'savings'] },
+    { label: '투자자산 (증권계좌)', types: ['securities'] },
     { label: '카드', types: ['card'] },
   ];
 
   function renderCard(acc: Account) {
     const Icon = ACCOUNT_TYPE_ICONS[acc.type];
-    const balKRW = accountCurrentKRW(acc, transactions, rates);
-    const balNative = accountCurrentNative(acc, transactions, rates);
+    const isSec = acc.type === 'securities';
+    const balKRW = accountValueKRW(acc, transactions, rates);
+    const balNative = isSec ? (acc.valuation ?? 0) : accountCurrentNative(acc, transactions, rates);
     const pct = totalAssets > 0 && !acc.isLiability ? (balKRW / totalAssets) * 100 : 0;
     return (
       <div key={acc.id} className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700">
@@ -221,12 +203,15 @@ export default function AssetManager() {
               <Icon size={20} style={{ color: acc.color }} />
             </div>
             <div>
-              <p className="text-sm font-bold text-gray-900 dark:text-white">{acc.name}</p>
-              <p className="text-xs text-gray-400">{ACCOUNT_TYPE_LABELS[acc.type]} · {acc.currency}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm font-bold text-gray-900 dark:text-white">{acc.name}</p>
+                <CurrencyBadge currency={acc.currency} />
+              </div>
+              <p className="text-xs text-gray-400">{ACCOUNT_TYPE_LABELS[acc.type]}</p>
             </div>
           </div>
           <div className="flex gap-1">
-            <button onClick={() => { setEditTarget(acc); setShowForm(true); }}
+            <button onClick={() => { if (isSec) { setCurrentPage('securities'); } else { setEditTarget(acc); setShowForm(true); } }}
               className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-indigo-600">
               <Edit2 size={14} />
             </button>
@@ -288,34 +273,6 @@ export default function AssetManager() {
         </div>
       </div>
 
-      {/* 증권 (증권관리 보유종목 기준, 증권사별) */}
-      {brokerGroups.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200">증권 (증권사별)</h3>
-            <button onClick={() => { setSecuritiesFilter(''); setCurrentPage('securities'); }}
-              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">증권관리 →</button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {brokerGroups.map((b) => (
-              <button key={b.broker} onClick={() => openSecurities(b.broker)}
-                className="text-left bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700 hover:border-violet-300 dark:hover:border-violet-700 transition-colors">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center">
-                    <LineChart size={20} className="text-violet-600 dark:text-violet-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-gray-900 dark:text-white">{b.broker}</p>
-                    <p className="text-xs text-gray-400">{b.count}개 종목 · 상세보기 →</p>
-                  </div>
-                </div>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{fmt(b.value)}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="flex justify-end gap-2">
         <button
           onClick={() => setShowShot(true)}
@@ -335,7 +292,7 @@ export default function AssetManager() {
       {ASSET_GROUPS.map((group) => {
         const groupAccounts = accounts.filter((a) => group.types.includes(a.type));
         if (groupAccounts.length === 0) return null;
-        const subtotal = groupAccounts.reduce((s, a) => s + accountCurrentKRW(a, transactions, rates), 0);
+        const subtotal = groupAccounts.reduce((s, a) => s + accountValueKRW(a, transactions, rates), 0);
         return (
           <div key={group.label}>
             <div className="flex items-center justify-between mb-2 px-1">

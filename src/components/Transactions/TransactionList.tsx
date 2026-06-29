@@ -10,6 +10,7 @@ import { fromKRW } from '../../utils/currency';
 import { txKRW } from '../../utils/calculations';
 import TransactionForm from './TransactionForm';
 import SmsParseModal from './SmsParseModal';
+import CurrencyBadge from '../common/CurrencyBadge';
 
 type SortKey = 'date' | 'amount' | 'category';
 type SortDir = 'asc' | 'desc';
@@ -281,6 +282,15 @@ export default function TransactionList() {
                       <div className="flex items-center gap-2">
                         <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: isTransfer ? '#64748B' : (cat?.color || '#6B7280') }} />
                         <span className="text-sm text-gray-700 dark:text-gray-200">{typeLabel === '환전' ? '환전' : isTransfer ? '이체' : (cat?.name || '기타')}</span>
+                        {isExchange ? (
+                          <span className="flex items-center gap-1">
+                            <CurrencyBadge currency={t.currency || 'KRW'} />
+                            <span className="text-gray-300 text-xs">→</span>
+                            <CurrencyBadge currency={t.toCurrency || 'KRW'} />
+                          </span>
+                        ) : (
+                          <CurrencyBadge currency={t.currency || 'KRW'} />
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden sm:table-cell">

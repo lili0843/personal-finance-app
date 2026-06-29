@@ -67,9 +67,11 @@ export function accountDeltaKRW(accountId: string, transactions: Transaction[]):
     else if (t.type === 'expense' && t.accountId === accountId) d -= v;
     else if (t.type === 'transfer') {
       if (t.isExchange) {
-        // 환전: 출금 = 출금액 + 수수료, 입금 = 입금액 (각자 통화 KRW 스냅샷)
-        if (t.fromAccountId === accountId) d -= (v + (t.feeKRW ?? 0));
-        if (t.toAccountId === accountId) d += (t.toAmountKRW ?? v);
+        // 환전: 수수료를 출금/입금 어느 쪽에서 차감할지에 따라 반영
+        const fk = t.feeKRW ?? 0;
+        const deductTo = t.feeDeduct === 'to';
+        if (t.fromAccountId === accountId) d -= (v + (deductTo ? 0 : fk));
+        if (t.toAccountId === accountId) d += ((t.toAmountKRW ?? v) - (deductTo ? fk : 0));
       } else {
         if (t.toAccountId === accountId) d += v;
         if (t.fromAccountId === accountId) d -= v;
@@ -84,6 +86,13 @@ export function accountCurrentKRW(a: Account, transactions: Transaction[], rates
   return accountKRW(a, rates) + accountDeltaKRW(a.id, transactions);
 }
 
+// 순자산/자산합계용 계좌 가치 (KRW)
+// 증권계좌는 "현재 평가액(수동)" 기준, 그 외는 거래 반영 현재 잔액
+export function accountValueKRW(a: Account, transactions: Transaction[], rates: FxRates): number {
+  if (a.type === 'securities') return toKRW(a.valuation ?? 0, a.currency, rates);
+  return accountCurrentKRW(a, transactions, rates);
+}
+
 // 거래까지 반영한 계좌의 현재 잔액 (계좌 통화 기준)
 export function accountCurrentNative(a: Account, transactions: Transaction[], rates: FxRates): number {
   const deltaKRW = accountDeltaKRW(a.id, transactions);
@@ -96,8 +105,8 @@ export function accountCurrentNative(a: Account, transactions: Transaction[], ra
 // transactions를 넘기면 거래까지 반영한 현재 잔액으로 합산
 export function getTotalAssetsKRW(accounts: Account[], rates: FxRates, transactions?: Transaction[]): number {
   return accounts
-    .filter((a) => !a.isLiability && a.type !== 'securities')
-    .reduce((sum, a) => sum + (transactions ? accountCurrentKRW(a, transactions, rates) : accountKRW(a, rates)), 0);
+    .filter((a) => !a.isLiability)
+    .reduce((sum, a) => sum + (transactions ? accountValueKRW(a, transactions, rates) : accountKRW(a, rates)), 0);
 }
 
 // 부채성 계좌 합계 (예: 카드형 계좌), KRW
@@ -127,21 +136,15 @@ export function getNetWorth(
   );
 }
 
-// 통화별 자산 비중 (KRW 환산) — 계좌 현재잔액 + 보유종목, 부채 제외
+// 통화별 자산 비중 (KRW 환산) — 부채 제외, 증권은 평가액
 export function getCurrencyBreakdownKRW(
   accounts: Account[],
-  holdings: Holding[],
   transactions: Transaction[],
   rates: FxRates,
 ): Record<string, number> {
   const out: Record<string, number> = { KRW: 0, USD: 0, VND: 0 };
   accounts.filter((a) => !a.isLiability).forEach((a) => {
-    out[a.currency] = (out[a.currency] || 0) + accountCurrentKRW(a, transactions, rates);
-  });
-  holdings.forEach((h) => {
-    const v = (h.lastPrice ?? 0) * h.quantity; // native
-    const krw = h.currency === 'USD' ? v * rates.USD : h.currency === 'VND' ? v * rates.VND : v;
-    out[h.currency] = (out[h.currency] || 0) + krw;
+    out[a.currency] = (out[a.currency] || 0) + accountValueKRW(a, transactions, rates);
   });
   return out;
 }
@@ -149,7 +152,6 @@ export function getCurrencyBreakdownKRW(
 // 자산 클래스별 비중 (KRW): 현금 / 예금 / 투자 / 카드(부채)
 export function getAssetClassBreakdownKRW(
   accounts: Account[],
-  holdings: Holding[],
   cards: Card[],
   transactions: Transaction[],
   rates: FxRates,
@@ -157,16 +159,23 @@ export function getAssetClassBreakdownKRW(
 ): { cash: number; deposit: number; investment: number; card: number } {
   let cash = 0, deposit = 0, investment = 0, card = 0;
   accounts.forEach((a) => {
-    const v = accountCurrentKRW(a, transactions, rates);
-    if (a.isLiability || a.type === 'card') card += v;
-    else if (a.type === 'cash' || a.type === 'bank') cash += v;
-    else if (a.type === 'deposit' || a.type === 'savings') deposit += v;
-    else if (a.type === 'securities') investment += v;
-    else cash += v;
+    if (a.isLiability || a.type === 'card') card += accountCurrentKRW(a, transactions, rates);
+    else if (a.type === 'securities') investment += accountValueKRW(a, transactions, rates);
+    else if (a.type === 'deposit' || a.type === 'savings') deposit += accountCurrentKRW(a, transactions, rates);
+    else cash += accountCurrentKRW(a, transactions, rates); // cash, bank, 기타
   });
-  investment += totalHoldingsKRWInternal(holdings, rates);
   card += getCardOutstanding(transactions, cards, yearMonth);
   return { cash, deposit, investment, card };
+}
+
+// 증권계좌 누적 투자원금(KRW) — 입금 이체로 집계된 현재 잔액
+export function securitiesPrincipalKRW(accounts: Account[], transactions: Transaction[], rates: FxRates): number {
+  return accounts.filter((a) => a.type === 'securities').reduce((s, a) => s + accountCurrentKRW(a, transactions, rates), 0);
+}
+
+// 증권계좌 총 평가액(KRW)
+export function securitiesValuationKRW(accounts: Account[], rates: FxRates): number {
+  return accounts.filter((a) => a.type === 'securities').reduce((s, a) => s + toKRW(a.valuation ?? 0, a.currency, rates), 0);
 }
 
 // 순자산 추이 (KRW) — 현재 순자산에서 매월 저축(수입-지출)을 역산

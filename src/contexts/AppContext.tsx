@@ -26,6 +26,11 @@ function uuid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+// 환전 수수료 자동 비용 카테고리
+const FEE_CATEGORY: Category = {
+  id: 'cat-fin-fee', name: '금융수수료', type: 'expense', color: '#64748B', icon: 'Banknote', isCustom: false,
+};
+
 interface AppContextType {
   // auth
   user: User | null;
@@ -60,6 +65,8 @@ interface AppContextType {
   deleteTransaction: (id: string) => void;
   // CSV 일괄 추가 (중복 제외 건수 반환)
   importTransactionsBulk: (items: Omit<Transaction, 'id'>[]) => { added: number; skipped: number };
+  // 환전 수수료를 "금융수수료" 지출로 자동 기록
+  addExchangeFeeExpense: (p: { date: string; amount: number; currency: Currency; fxRate: number; amountKRW: number; memo: string }) => void;
 
   addAccount: (a: Omit<Account, 'id'>) => void;
   updateAccount: (id: string, a: Partial<Account>) => void;
@@ -293,6 +300,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions((prev) => prev.filter((x) => x.id !== id));
   }, []);
 
+  const addExchangeFeeExpense = useCallback((p: { date: string; amount: number; currency: Currency; fxRate: number; amountKRW: number; memo: string }) => {
+    // 금융수수료 카테고리가 없으면 추가
+    setCategories((prev) => prev.find((c) => c.id === FEE_CATEGORY.id) ? prev : [...prev, FEE_CATEGORY]);
+    // 계좌 잔액은 환전 거래에서 이미 반영되므로 accountId 없이 통계용 지출만 기록
+    setTransactions((prev) => [{
+      id: uuid(),
+      date: p.date,
+      type: 'expense' as const,
+      amount: p.amount,
+      currency: p.currency,
+      fxRate: p.fxRate,
+      amountKRW: p.amountKRW,
+      categoryId: FEE_CATEGORY.id,
+      paymentMethod: '환전 수수료',
+      memo: p.memo,
+    }, ...prev]);
+  }, []);
+
   const importTransactionsBulk = useCallback((items: Omit<Transaction, 'id'>[]) => {
     let added = 0;
     let skipped = 0;
@@ -483,7 +508,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       currentPage, setCurrentPage,
       securitiesFilter, setSecuritiesFilter,
       rates, displayCurrency, setDisplayCurrency, refreshRates, setManualRates,
-      addTransaction, updateTransaction, deleteTransaction, importTransactionsBulk,
+      addTransaction, updateTransaction, deleteTransaction, importTransactionsBulk, addExchangeFeeExpense,
       addAccount, updateAccount, deleteAccount, applyInitialSetup,
       addCard, updateCard, deleteCard,
       setBudget,

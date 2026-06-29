@@ -52,8 +52,10 @@ export interface Transaction {
   toCurrency?: Currency;    // 입금 통화
   toAmountKRW?: number;     // 입금액 KRW 스냅샷
   exchangeRate?: number;    // 1 출금통화 = ? 입금통화
-  fee?: number;             // 환전 수수료 (출금통화 기준)
+  fee?: number;             // 환전 수수료
+  feeCurrency?: Currency;   // 수수료 통화
   feeKRW?: number;          // 수수료 KRW 스냅샷
+  feeDeduct?: 'from' | 'to'; // 수수료 차감 위치 (출금/입금 계좌)
   // CSV 가져오기 중복 방지 해시
   dedupeHash?: string;
   // 카드 할부 (1=일시불, 2/3/6/12... = 개월수)
@@ -68,6 +70,7 @@ export interface Account {
   currency: Currency;
   color: string;
   isLiability?: boolean; // 신용카드 등 부채성 계좌 (순자산 계산 시 차감)
+  valuation?: number;    // 증권계좌 현재 평가액 (수동 입력). 누적 투자원금은 입금 이체로 자동 집계
 }
 
 export interface Card {

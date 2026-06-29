@@ -1,6 +1,6 @@
-// 간단한 오프라인 캐시 서비스워커
-const CACHE = 'budget-app-v5';
-const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+// 간단한 오프라인 캐시 서비스워커 (하위 경로 배포 대응 — 상대경로 사용)
+const CACHE = 'budget-app-v14';
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -34,7 +34,7 @@ self.addEventListener('fetch', (event) => {
         return res;
       })
       .catch(() =>
-        caches.match(req).then((cached) => cached || caches.match('/index.html'))
+        caches.match(req).then((cached) => cached || caches.match('./index.html'))
       )
   );
 });

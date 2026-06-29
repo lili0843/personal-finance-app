@@ -9,10 +9,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>,
 );
 
-// PWA 서비스워커 등록 (프로덕션 빌드에서만 동작)
+// PWA 서비스워커 등록 — 하위 경로(/budget-app/) 배포 대응
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
+    const base = import.meta.env.BASE_URL; // 예: '/budget-app/'
+    navigator.serviceWorker.register(`${base}sw.js`, { scope: base }).catch(() => {
       // 등록 실패해도 앱은 정상 동작
     });
   });

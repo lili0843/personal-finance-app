@@ -11,7 +11,7 @@ interface Props {
 }
 
 export default function TransactionForm({ onClose, editTransaction }: Props) {
-  const { categories, accounts, cards, addTransaction, updateTransaction, rates } = useApp();
+  const { categories, accounts, cards, addTransaction, updateTransaction, addExchangeFeeExpense, rates } = useApp();
   const isEdit = !!editTransaction;
 
   const [type, setType] = useState<TransactionType>(editTransaction?.type || 'expense');
@@ -30,6 +30,8 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
   const [toAccountId, setToAccountId] = useState(editTransaction?.toAccountId || '');
   const [exchangeRateStr, setExchangeRateStr] = useState(editTransaction?.exchangeRate ? String(editTransaction.exchangeRate) : '');
   const [feeStr, setFeeStr] = useState(editTransaction?.fee ? editTransaction.fee.toLocaleString('ko-KR') : '');
+  const [feeCurrency, setFeeCurrency] = useState<Currency>(editTransaction?.feeCurrency || 'USD');
+  const [feeDeduct, setFeeDeduct] = useState<'from' | 'to'>(editTransaction?.feeDeduct || 'from');
   const [memo, setMemo] = useState(editTransaction?.memo || '');
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -55,11 +57,12 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTransfer, fromAccountId]);
 
-  // 환전이면 시장 환율을 제안값으로 채움
+  // 환전이면 시장 환율을 제안값으로 채움 + 수수료 통화 기본값
   useEffect(() => {
     if (isExchange) {
       const cross = snapshotRate(fromCur, rates) / snapshotRate(toCur, rates);
       setExchangeRateStr(String(Math.round(cross * 100) / 100));
+      setFeeCurrency(fromCur);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromAccountId, toAccountId]);
@@ -70,6 +73,12 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
   const exchangeRate = parseAmount(exchangeRateStr);
   const feeNum = parseAmount(feeStr);
   const toAmount = isExchange ? amountNum * exchangeRate : 0;
+  // 수수료를 출금/입금 통화로 환산
+  const feeKRWval = feeNum > 0 ? toKRW(feeNum, feeCurrency, rates) : 0;
+  const feeInFrom = snapshotRate(fromCur, rates) > 0 ? feeKRWval / snapshotRate(fromCur, rates) : 0;
+  const feeInTo = snapshotRate(toCur, rates) > 0 ? feeKRWval / snapshotRate(toCur, rates) : 0;
+  const realOut = amountNum + (feeDeduct === 'from' ? feeInFrom : 0); // 실제 출금 (fromCur)
+  const realIn = toAmount - (feeDeduct === 'to' ? feeInTo : 0);       // 실제 입금 (toCur)
 
   function validate() {
     const errs: Record<string, string> = {};
@@ -79,7 +88,11 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
       if (!fromAccountId) errs.from = '출금 계좌를 선택해주세요';
       if (!toAccountId) errs.to = '입금 계좌를 선택해주세요';
       if (fromAccountId && toAccountId && fromAccountId === toAccountId) errs.to = '서로 다른 계좌를 선택해주세요';
-      if (isExchange && exchangeRate <= 0) errs.rate = '환율을 입력해주세요';
+      if (isExchange) {
+        if (exchangeRate <= 0) errs.rate = '환율을 입력해주세요';
+        if (feeNum > 0 && realIn <= 0) errs.fee = '수수료가 입금액보다 큽니다. 수수료 금액·통화를 확인해주세요.';
+        if (feeNum > 0 && realOut <= 0) errs.fee = '수수료가 출금액보다 큽니다. 수수료 금액·통화를 확인해주세요.';
+      }
     } else {
       if (!categoryId) errs.categoryId = '카테고리를 선택해주세요';
       if (paymentType === 'card' && !selectedCardId) errs.payment = '카드를 선택해주세요';
@@ -115,7 +128,7 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
         const fromKRWv = Math.round(toKRW(amountNum, fromCur, rates));
         const toAmt = amountNum * exchangeRate;
         const toAmountKRW = Math.round(toKRW(toAmt, toCur, rates));
-        const feeKRW = feeNum > 0 ? Math.round(toKRW(feeNum, fromCur, rates)) : undefined;
+        const feeKRW = feeNum > 0 ? Math.round(toKRW(feeNum, feeCurrency, rates)) : undefined;
         const exData = {
           date,
           type: 'transfer' as TransactionType,
@@ -134,11 +147,26 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
           toAmountKRW,
           exchangeRate,
           fee: feeNum > 0 ? feeNum : undefined,
+          feeCurrency: feeNum > 0 ? feeCurrency : undefined,
           feeKRW,
+          feeDeduct: feeNum > 0 ? feeDeduct : undefined,
           memo,
         };
         if (isEdit) updateTransaction(editTransaction.id, exData);
-        else addTransaction(exData);
+        else {
+          addTransaction(exData);
+          // 환전 수수료를 금융수수료 지출로 자동 기록 (통계/예산 반영)
+          if (feeNum > 0) {
+            addExchangeFeeExpense({
+              date,
+              amount: feeNum,
+              currency: feeCurrency,
+              fxRate: snapshotRate(feeCurrency, rates),
+              amountKRW: feeKRW ?? 0,
+              memo: `환전 수수료 (${fromCur}→${toCur})`,
+            });
+          }
+        }
         onClose();
         return;
       }
@@ -324,29 +352,70 @@ export default function TransactionForm({ onClose, editTransaction }: Props) {
               {isExchange && (
                 <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10 p-3 space-y-3">
                   <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">💱 환전 ({fromCur} → {toCur})</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">환율 (1 {fromCur} = ? {toCur})</label>
-                      <input value={exchangeRateStr} inputMode="decimal"
-                        onChange={(e) => setExchangeRateStr(formatAmountInput(e.target.value))}
-                        className="w-full px-2.5 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white" />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">수수료 ({fromCur}, 선택)</label>
+
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">환율 (1 {fromCur} = ? {toCur})</label>
+                    <input value={exchangeRateStr} inputMode="decimal"
+                      onChange={(e) => setExchangeRateStr(formatAmountInput(e.target.value))}
+                      className="w-full px-2.5 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white" />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">수수료 (선택)</label>
+                    <div className="flex gap-2">
                       <input value={feeStr} inputMode="decimal"
                         onChange={(e) => setFeeStr(formatAmountInput(e.target.value))} placeholder="0"
-                        className="w-full px-2.5 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white" />
+                        className="flex-1 px-2.5 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white" />
+                      <select value={feeCurrency} onChange={(e) => setFeeCurrency(e.target.value as Currency)}
+                        className="w-20 px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white">
+                        <option value="KRW">₩</option>
+                        <option value="USD">$</option>
+                        <option value="VND">₫</option>
+                      </select>
                     </div>
                   </div>
+
+                  {/* 수수료 차감 위치 */}
+                  {feeNum > 0 && (
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">수수료 차감</label>
+                      <div className="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 text-xs">
+                        <button type="button" onClick={() => setFeeDeduct('from')}
+                          className={`flex-1 py-1.5 ${feeDeduct === 'from' ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-gray-700 text-gray-500'}`}>출금계좌 차감</button>
+                        <button type="button" onClick={() => setFeeDeduct('to')}
+                          className={`flex-1 py-1.5 ${feeDeduct === 'to' ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-gray-700 text-gray-500'}`}>입금계좌 차감</button>
+                      </div>
+                    </div>
+                  )}
                   {errors.rate && <p className="text-xs text-rose-500">{errors.rate}</p>}
-                  <div className="text-center text-sm bg-white dark:bg-gray-800 rounded-lg py-2 border border-amber-100 dark:border-amber-900/40">
-                    <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(amountNum, fromCur)}</span>
-                    <span className="text-gray-400 mx-2">→</span>
-                    <span className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(Math.round(toAmount), toCur)}</span>
+                  {errors.fee && <p className="text-xs text-rose-500">{errors.fee}</p>}
+
+                  {/* 환전 결과 (실시간) */}
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-amber-100 dark:border-amber-900/40 space-y-1.5">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">출금 금액</span>
+                      <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(amountNum, fromCur)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">수수료</span>
+                      <span className="font-medium text-rose-500">{feeNum > 0 ? `${formatCurrency(feeNum, feeCurrency)} (${feeDeduct === 'from' ? '출금' : '입금'}계좌)` : '없음'}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">실제 출금</span>
+                      <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(realOut, fromCur)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">적용 환율</span>
+                      <span className="font-medium text-gray-700 dark:text-gray-300">1 {fromCur} = {exchangeRate.toLocaleString('ko-KR', { maximumFractionDigits: 4 })} {toCur}</span>
+                    </div>
+                    <div className="flex justify-between text-sm pt-1.5 border-t border-gray-100 dark:border-gray-700">
+                      <span className="text-gray-600 dark:text-gray-300 font-medium">실제 입금</span>
+                      <span className={`font-bold ${realIn <= 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{formatCurrency(Math.round(realIn), toCur)}</span>
+                    </div>
+                    {feeNum > 0 && (
+                      <p className="text-[11px] text-gray-400 pt-1">💡 수수료는 "금융수수료" 지출로 자동 기록되어 월 지출·통계·예산에 반영됩니다.</p>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-400 text-center">
-                    출금 {formatCurrency(amountNum + feeNum, fromCur)} (수수료 포함) · 입금 {formatCurrency(Math.round(toAmount), toCur)}
-                  </p>
                 </div>
               )}
             </div>
